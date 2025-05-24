@@ -1,50 +1,54 @@
 pipeline {
-    agent {
-        node {
-            label 'maven'
-        }
+    agent any
+
+    environment {
+        IMAGE_NAME = 'my-node-app'
+        IMAGE_TAG = 'latest'
     }
 
     stages {
-        stage("build"){
+        stage('Checkout Code') {
             steps {
-                 echo "----------- build started ----------"
-                sh 'mvn clean deploy -Dmaven.test.skip=true'
-                 echo "----------- build complted ----------"
+                checkout scm
             }
         }
 
-       stage("imgeCreation"){
+        stage('Build Docker Image') {
             steps {
-                 echo "----------- Image Creation ----------"
-                docker build -t dockerfile
-                 
+                script {
+                    dockerImage = docker.build("${IMAGE_NAME}:${IMAGE_TAG}")
+                }
             }
         }
-        stage("Jar Publish") {
-        steps {
-            script {
-                    echo '<--------------- Jar Publish Started --------------->'
-                     def server = Artifactory.newServer url:registry+"/artifactory" ,  credentialsId:"artfiact-cred"
-                     def properties = "buildid=${env.BUILD_ID},commitid=${GIT_COMMIT}";
-                     def uploadSpec = """{
-                          "files": [
-                            {
-                              "pattern": "jarstaging/(*)",
-                              "target": "libs-release-local/{1}",
-                              "flat": "false",
-                              "props" : "${properties}",
-                              "exclusions": [ "*.sha1", "*.md5"]
-                            }
-                         ]
-                     }"""
-                     def buildInfo = server.upload(uploadSpec)
-                     buildInfo.env.collect()
-                     server.publishBuildInfo(buildInfo)
-                     echo '<--------------- Jar Publish Ended --------------->'  
-            
+
+        stage('Run Container') {
+            steps {
+                script {
+                    // Stop and remove any running container with the same name
+                    sh "docker rm -f ${IMAGE_NAME}-container || true"
+
+                    // Run the container in detached mode
+                    sh "docker run -d --name ${IMAGE_NAME}-container -p 3000:3000 ${IMAGE_NAME}:${IMAGE_TAG}"
+                }
             }
-        }   
-    }   
-}
+        }
+
+        stage('Archive Artifacts') {
+            steps {
+                // Adjust the path to what you want to archive (e.g., build output, logs)
+                archiveArtifacts artifacts: '**/dist/**', allowEmptyArchive: true
+            }
+        }
+    }
+
+    post {
+        cleanup {
+            // Optional: Clean up Docker artifacts after the job
+            sh "docker rmi ${IMAGE_NAME}:${IMAGE_TAG} || true"
+        }
+
+        always {
+            echo "Pipeline finished"
+        }
+    }
 }
